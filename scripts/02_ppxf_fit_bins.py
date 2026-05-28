@@ -1,4 +1,4 @@
-"""Stage 2: Fit MILES SSP templates with pPXF on each Voronoi bin.
+"""Stage 2: Fit SSP templates with pPXF on each Voronoi bin.
 
 For each bin we
   - sum the spaxel spectra & propagate variance,
@@ -6,10 +6,8 @@ For each bin we
   - fit pPXF with stars + Gaussian gas templates,
   - store the stellar best-fit (without gas), gas best-fit, and parameters.
 
-The fit is performed over the wavelength range covered by both MUSE and the
-EMILES library at MILES (high) resolution (≤7400 Å rest-frame).  Lines outside
-this range (e.g. [SIII]9069) will instead use a local polynomial fit at
-stage 3.
+Supports BPASS v2.2.1 (binary, 1 Myr–100 Gyr) and EMILES (single-star, 30 Myr–14 Gyr).
+Set TEMPLATE_LIB below to switch.
 """
 import os
 import sys
@@ -17,10 +15,11 @@ import time
 import warnings
 import numpy as np
 from astropy.io import fits
+from scipy.ndimage import gaussian_filter1d
 
 sys.path.insert(0, os.path.dirname(__file__))
 from common import (
-    CUBE_PATH, OUT_DIR, V_SYS, Z_SYS, C_KMS, load_cube, muse_lsf_fwhm,
+    CUBE_PATH, OUT_DIR, V_SYS, Z_SYS, C_KMS, load_cube, muse_lsf_fwhm, ROOT,
 )
 
 import ppxf.ppxf_util as util
@@ -32,10 +31,14 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
+TEMPLATE_LIB = os.environ.get("PIPE_TEMPLATE_LIB", "bpass")  # "bpass" or "emiles"
+
 SPS_NPZ = os.path.join(
     os.path.dirname(__import__("ppxf").__file__),
     "sps_models", "spectra_emiles_9.0.npz",
 )
+BPASS_NPZ = os.path.join(ROOT, "templates", "bpass_processed", "bpass_templates_raw.npz")
+
 VELSCALE_OUT = 60.0          # km/s / pixel in log-rebinned spectra
 FIT_OBS_RANGE = (4760.0 * (1 + Z_SYS), 7400.0 * (1 + Z_SYS))   # observed-frame fit window
 # Telluric sky-line masks (observed-frame wavelengths), converted to rest below
@@ -43,6 +46,65 @@ _SKY_MASK_OBS = [(5570.0, 5590.0), (6290.0, 6310.0), (6360.0, 6370.0)]
 SKY_MASK_REST = [(lo / (1 + Z_SYS), hi / (1 + Z_SYS)) for lo, hi in _SKY_MASK_OBS]
 
 REGUL_ERR = 0.013            # pPXF regul ~ 1/std(noise)
+
+
+def load_bpass_templates(ln_lam_gal, velscale, FWHM_gal):
+    """Load BPASS v2.2.1 templates, log-rebin, convolve to MUSE LSF.
+
+    Returns (templates_2d, ln_lam_out) where templates_2d has shape
+    (n_pix_log, n_ages * n_metals).  The output wavelength grid is
+    extended by ~4% on each side so pPXF's internal velocity-shift
+    padding is covered.
+    """
+    data = np.load(BPASS_NPZ, allow_pickle=True)
+    wave_bpass = data["wave"]
+    z_strings = data["z_strings"]
+    ages_gyr = data["ages_gyr"]
+    templates_dict = data["templates_dict"].item()
+
+    lam_gal = np.exp(ln_lam_gal)
+    d_ln_lam = ln_lam_gal[1] - ln_lam_gal[0]
+
+    # Extend the template log-grid by ±4% in wavelength
+    pad_pix = int(0.04 / d_ln_lam)  # ~4% padding
+    ln_lam_temp = np.linspace(
+        ln_lam_gal[0] - pad_pix * d_ln_lam,
+        ln_lam_gal[-1] + pad_pix * d_ln_lam,
+        len(ln_lam_gal) + 2 * pad_pix,
+    )
+    lam_temp_arr = np.exp(ln_lam_temp)
+
+    all_flux_log = []
+    for zstr in z_strings:
+        fluxes = templates_dict[zstr]  # (n_wave_bpass, n_ages)
+        n_ages = fluxes.shape[1]
+
+        for a in range(n_ages):
+            # Interpolate from linear BPASS grid to the extended log grid
+            flux_lin = np.interp(lam_temp_arr, wave_bpass, fluxes[:, a])
+
+            # Convolve to MUSE LSF
+            if isinstance(FWHM_gal, dict):
+                fwhm_interp = np.interp(lam_temp_arr, FWHM_gal["lam"], FWHM_gal["fwhm"])
+            else:
+                fwhm_interp = np.full_like(lam_temp_arr, FWHM_gal)
+            sig_pix = (fwhm_interp / 2.355) / (lam_temp_arr * velscale / C_KMS)
+            med_sig = np.median(sig_pix)
+
+            if med_sig > 0.5:
+                flux_conv = gaussian_filter1d(flux_lin, med_sig, mode='nearest')
+            else:
+                flux_conv = flux_lin
+
+            all_flux_log.append(flux_conv)
+
+    templates = np.column_stack(all_flux_log)  # (n_pix_log_extended, n_ages * n_metals)
+    templates /= np.median(templates)
+    print(f"  BPASS: {templates.shape[1]} templates ({len(z_strings)} Z × {n_ages} ages)"
+          f"  ages={ages_gyr[0]*1000:.0f} Myr–{ages_gyr[-1]:.0f} Gyr"
+          f"  Z={list(z_strings)}"
+          f"  λ=[{lam_temp_arr[0]:.1f}, {lam_temp_arr[-1]:.1f}] Å")
+    return templates, ln_lam_temp
 
 
 def integrated_spectrum(data, var, bin_num, xx, yy, b):
@@ -88,19 +150,24 @@ def main():
     galaxy_log, ln_lam_gal, velscale = util.log_rebin(lam_range_gal, spec_fit)
     print(f"  velscale = {velscale:.3f} km/s/px")
 
-    # ---------- Load EMILES templates --------------------------------------
-    print(f"Loading EMILES from {SPS_NPZ} ...")
-    sps = lib.sps_lib(
-        SPS_NPZ, velscale=velscale, fwhm_gal=FWHM_gal,
-        norm_range=[5070, 5950], lam_range=[3540, 7500],
-    )
-    templates = sps.templates.reshape(sps.templates.shape[0], -1)
-    templates /= np.median(templates)
-    ln_lam_temp = sps.ln_lam_temp
-    n_temps_stars = templates.shape[1]
+    # ---------- Load stellar templates ---------------------------------------
+    if TEMPLATE_LIB == "bpass" and os.path.exists(BPASS_NPZ):
+        print(f"Loading BPASS v2.2.1 from {BPASS_NPZ} ...")
+        templates, ln_lam_temp = load_bpass_templates(ln_lam_gal, velscale, FWHM_gal)
+        n_temps_stars = templates.shape[1]
+    else:
+        print(f"Loading EMILES from {SPS_NPZ} ...")
+        sps = lib.sps_lib(
+            SPS_NPZ, velscale=velscale, fwhm_gal=FWHM_gal,
+            norm_range=[5070, 5950], lam_range=[3540, 7500],
+        )
+        templates = sps.templates.reshape(sps.templates.shape[0], -1)
+        templates /= np.median(templates)
+        ln_lam_temp = sps.ln_lam_temp
+        n_temps_stars = templates.shape[1]
     print(f"  {n_temps_stars} stellar templates, npix={templates.shape[0]}")
 
-    # Gas templates from pPXF utility (used for joint fit, then subtracted out)
+    # ---------- Gas templates for joint fit ---------------------------------
     gas_templates, gas_names, gas_wave = util.emission_lines(
         ln_lam_temp, lam_range_gal, FWHM_gal,
         tie_balmer=False, limit_doublets=False,
