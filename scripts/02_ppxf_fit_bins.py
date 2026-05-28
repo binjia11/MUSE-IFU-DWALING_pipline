@@ -37,8 +37,10 @@ SPS_NPZ = os.path.join(
     "sps_models", "spectra_emiles_9.0.npz",
 )
 VELSCALE_OUT = 60.0          # km/s / pixel in log-rebinned spectra
-FIT_OBS_RANGE = (4760.0, 7400.0 * (1 + Z_SYS))   # observed-frame fit window
-SKY_MASK_OBS = [(5570.0, 5590.0), (6290.0, 6310.0), (6360.0, 6370.0)]  # [OI]_sky etc.
+FIT_OBS_RANGE = (4760.0 * (1 + Z_SYS), 7400.0 * (1 + Z_SYS))   # observed-frame fit window
+# Telluric sky-line masks (observed-frame wavelengths), converted to rest below
+_SKY_MASK_OBS = [(5570.0, 5590.0), (6290.0, 6310.0), (6360.0, 6370.0)]
+SKY_MASK_REST = [(lo / (1 + Z_SYS), hi / (1 + Z_SYS)) for lo, hi in _SKY_MASK_OBS]
 
 REGUL_ERR = 0.013            # pPXF regul ~ 1/std(noise)
 
@@ -81,7 +83,7 @@ def main():
     sample_b = int(np.argmax(np.bincount(bin_num)))
     spec0, noise0, npix0 = integrated_spectrum(data, var, bin_num, xx, yy, sample_b)
     spec_fit = spec0[i_lo:i_hi]
-    lam_range_gal = np.array([wave_fit[0], wave_fit[-1]])
+    lam_range_gal = np.array([wave_fit[0], wave_fit[-1]]) / (1 + Z_SYS)
 
     galaxy_log, ln_lam_gal, velscale = util.log_rebin(lam_range_gal, spec_fit)
     print(f"  velscale = {velscale:.3f} km/s/px")
@@ -122,7 +124,7 @@ def main():
     gas_component = np.array(component) > 0
     moments = [2, 2, 2]                    # V, σ per component
 
-    V0 = V_SYS       # systemic velocity from common config
+    V0 = 0.0        # both templates and galaxy are in rest frame
     start = [
         [V0, 60.0],                       # stars
         [V0, 60.0],                       # Balmer
@@ -161,7 +163,7 @@ def main():
         # Build sky mask in log-space
         lam_gal = np.exp(ln_lam_gal)
         good_pix = np.ones_like(lam_gal, dtype=bool)
-        for lo, hi in SKY_MASK_OBS:
+        for lo, hi in SKY_MASK_REST:
             good_pix &= ~((lam_gal > lo) & (lam_gal < hi))
         good_pixels = np.where(good_pix)[0]
 

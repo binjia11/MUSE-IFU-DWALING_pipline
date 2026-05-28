@@ -22,7 +22,9 @@ import glob
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPTS_DIR)
-SAMPLE_DIR = os.path.join(ROOT, " DWALIN_SAMPLE")
+sys.path.insert(0, SCRIPTS_DIR)
+from common import measure_systemic_velocity
+SAMPLE_DIR = os.path.join(ROOT, " DWALIN_Sample")
 CONDA_ENV = "uclchem_3.4"
 PYTHON = os.path.expanduser(f"/opt/anaconda3/envs/{CONDA_ENV}/bin/python3")
 
@@ -34,7 +36,7 @@ for f in sorted(glob.glob(os.path.join(SAMPLE_DIR, "*.fits"))):
         continue
     cube_path = f
     gal_name = name
-    v_sys = 0.0  # all sample galaxies have RADVEL=0 in headers
+    v_sys = measure_systemic_velocity(cube_path, verbose=True)
     GALAXIES.append((gal_name, cube_path, v_sys))
 
 STAGES = [
