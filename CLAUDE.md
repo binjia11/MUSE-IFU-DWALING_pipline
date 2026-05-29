@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-MUSE IFU pipeline for studying low-metallicity galaxies with ionized gas shocks in the LMC/DWALIN sample. Performs Voronoi binning, pPXF stellar continuum fitting, emission line fitting, and BPT classification of ionization mechanisms (SF vs AGN vs shocks).
+MUSE IFU pipeline for studying low-metallicity galaxies with ionized gas shocks in the LMC/DWALIN sample. Performs Voronoi binning, pPXF stellar continuum fitting (BPASS v2.2.1), emission line fitting, and BPT classification of ionization mechanisms (SF vs AGN vs shocks).
+
+**23 galaxies processed** across the DWALIN sample + additional low-metallicity targets.
 
 ## Conda environment
 
@@ -19,10 +21,17 @@ Key packages: `astropy`, `numpy`, `scipy`, `matplotlib`, `ppxf`, `vorbin`.
 **Full pipeline for all sample galaxies:**
 
 ```bash
+# Sequential (one galaxy at a time)
 python3 scripts/run_pipeline.py
+
+# Parallel (N galaxies concurrently, 1 core each)
+python3 scripts/run_pipeline.py --parallel        # all cores
+python3 scripts/run_pipeline.py --parallel 4      # 4 concurrent galaxies
 ```
 
-This driver iterates over MUSE cubes in `DWALIN_Sample/`, running stages 01–05 sequentially for each galaxy. Per-galaxy parameters are passed via environment variables (`PIPE_GALAXY`, `PIPE_CUBE_PATH`, `PIPE_OUT_DIR`, `PIPE_V_SYS`). Each stage has a 4-hour timeout.
+In parallel mode, each galaxy gets 1 dedicated core (`OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `MKL_NUM_THREADS=1`), and stage 4 uses `PIPE_N_WORKERS=1`. v_sys is measured sequentially upfront to avoid memory pressure from loading multiple MUSE cubes simultaneously.
+
+The driver auto-discovers all `.fits` files in `DWALIN_Sample/`, measures systemic velocity via Hα cross-correlation, and skips galaxies with existing `outputs/bpt/<galaxy>_bpt.pdf`. No timeouts — runs each stage to completion (long runtimes are from large Voronoi bin counts, not code issues).
 
 **Individual stage for one galaxy** (from the project root):
 
@@ -30,7 +39,9 @@ This driver iterates over MUSE cubes in `DWALIN_Sample/`, running stages 01–05
 export PIPE_GALAXY=ESO154-023
 export PIPE_CUBE_PATH="/Users/binjia/Desktop/low-metallicity_shocks_LMC/DWALIN_Sample/ESO154-023.fits"
 export PIPE_OUT_DIR="/Users/binjia/Desktop/low-metallicity_shocks_LMC/outputs/ESO154-023"
-export PIPE_V_SYS=0.0
+export PIPE_V_SYS=581
+export PIPE_TEMPLATE_LIB=bpass
+export PIPE_N_WORKERS=7                # stage 4 worker count (default: cpu_count-1)
 python3 scripts/02_ppxf_fit_bins.py
 ```
 
@@ -40,24 +51,24 @@ The pipeline has 5 sequential stages, each a standalone script, communicating th
 
 1. **`01_voronoi_binning.py`** — Computes continuum S/N per spaxel (5300–5530 Å rest-frame), then uses `vorbin` to adaptively bin spaxels to S/N ≥ 50. Outputs `voronoi_bin_map.fits` + `voronoi_bins.npz`.
 
-2. **`02_ppxf_fit_bins.py`** — For each Voronoi bin: sums spaxel spectra, log-rebins, runs pPXF with EMILES SSP templates + Gaussian gas templates (3 kinematic components: stars, Balmer, forbidden). Fits over 4760–7400 Å observed-frame. Stores stellar continuum models and gas models per bin in `ppxf_bin_fits.npz`.
+2. **`02_ppxf_fit_bins.py`** — For each Voronoi bin: sums spaxel spectra, log-rebins, runs pPXF with **BPASS v2.2.1** SSP templates (binary, 1 Myr–100 Gyr, 8 metallicities z001–z020) + Gaussian gas templates (3 kinematic components: stars, Balmer, forbidden). Fits over 4760–7400 Å observed-frame. Stores stellar continuum models and gas models per bin in `ppxf_bin_fits.npz`. Set `PIPE_TEMPLATE_LIB=emiles` to use EMILES instead.
 
-3. **`03_subtract_continuum.py`** — Rescales the per-bin stellar model to match each spaxel's local continuum median, subtracts it. Outside the MILES coverage (e.g. around [SIII]9069), applies local 3rd-order polynomial fits around each emission line (±60 Å window, masking line core ±12 Å). Outputs `<galaxy>_cont_sub.fits` (DATA + STAT + VALID extensions).
+3. **`03_subtract_continuum.py`** — Rescales the per-bin stellar model to match each spaxel's local continuum median, subtracts it. Outside the BPASS coverage (e.g. around [SIII]9069), applies local 3rd-order polynomial fits around each emission line (±60 Å window, masking line core ±12 Å). Outputs `<galaxy>_cont_sub.fits` (DATA + STAT + VALID extensions).
 
-4. **`04_fit_emission_lines.py`** — Multiprocessed per-spaxel Gaussian fitting of all emission lines simultaneously. Single shared velocity and velocity dispersion per spaxel; [OIII]4959/5007 and [NII]6548/6584 doublet amplitudes are tied at atomic ratios. MUSE instrumental broadening is accounted for. S/N ≥ 3 threshold for detection. Outputs `kinematics.fits` and per-line FITS maps in `line_maps/`.
+4. **`04_fit_emission_lines.py`** — Multiprocessed per-spaxel Gaussian fitting of all emission lines simultaneously. Single shared velocity and velocity dispersion per spaxel; [OIII]4959/5007 and [NII]6548/6584 doublet amplitudes are tied at atomic ratios. MUSE instrumental broadening is accounted for. S/N ≥ 3 threshold for detection. Worker count controlled by `PIPE_N_WORKERS` env var. Outputs `kinematics.fits` and per-line FITS maps in `line_maps/`.
 
 5. **`05_bpt_diagrams.py`** — Computes N-BPT, S-BPT, and O-BPT line ratios, classifies each spaxel using Kauffmann+03 / Kewley+01/06 demarcation lines, produces multi-page PDF with scatter + spatial map panels in `outputs/bpt/`.
 
 ### Config / shared modules
 
-- **`scripts/common.py`** — Shared constants and helpers for the DWALIN sample pipeline. Reads galaxy-specific config from env vars (`PIPE_*`). Contains the emission line list (Cresci 2017), doublet ratios, MUSE LSF function, and `load_cube()`.
-- **`scripts/00_common.py`** — Legacy single-galaxy version hardcoded for He 2-10 (V_SYS=873 km/s). Not used by the pipeline driver.
-- **`scripts/bpt_demarcation_lines_v3.py`** — Standalone reference script for BPT demarcation line visualization (Cresci+2017 Fig. 5 style). Used as visual reference for stage 5.
+- **`scripts/common.py`** — Shared constants and helpers. Reads galaxy-specific config from env vars (`PIPE_*`). Contains the emission line list (Cresci 2017), doublet ratios, MUSE LSF function, `load_cube()`, and `measure_systemic_velocity()` (Hα cross-correlation).
+- **`scripts/00_common.py`** — Legacy single-galaxy version. Not used by the pipeline driver.
+- **`scripts/bpt_demarcation_lines_v3.py`** — Standalone BPT demarcation line visualization (Cresci+2017 Fig. 5 style).
 
 ### Input data
 
-- **`DWALIN_Sample/`** — MUSE datacubes (`.fits`) for 11 galaxies. Each cube has 3 extensions: PRIMARY (header), DATA (flux, shape nλ×ny×nx), STAT (variance). All sample galaxies have RADVEL=0 in their headers (V_SYS=0).
-- HEN_2-10 is excluded from the automated pipeline run (already processed separately).
+- **`DWALIN_Sample/`** — 24 MUSE datacubes (`.fits`). Each cube has 3 extensions: PRIMARY (header), DATA (flux, shape nλ×ny×nx), STAT (variance).
+- HEN_2-10 is excluded from the automated pipeline run.
 
 ### Output structure
 
@@ -75,18 +86,26 @@ outputs/
     <galaxy>_bpt.pdf            BPT diagnostic diagrams
 ```
 
-### EMILES templates
+### BPASS templates
 
-pPXF requires `spectra_emiles_9.0.npz` in the pPXF sps_models directory. Download:
+BPASS v2.2.1 (binary SSP, IMF slope -1.35, 300 M☉ upper cutoff) pre-processed into `templates/bpass_processed/`:
 
-```bash
-curl -L -o /opt/anaconda3/envs/uclchem_3.4/lib/python3.9/site-packages/ppxf/sps_models/spectra_emiles_9.0.npz \
-  https://raw.githubusercontent.com/micappe/ppxf_data/main/spectra_emiles_9.0.npz
-```
+- `bpass_templates_raw.npz` — 8 metallicities (z001–z020) × 51 ages (1 Myr–100 Gyr)
+- Templates are log-rebinned and convolved to MUSE LSF at load time in stage 2
+
+Set `PIPE_TEMPLATE_LIB=bpass` (default) or `PIPE_TEMPLATE_LIB=emiles` to switch.
 
 ## Data conventions
 
 - MUSE cubes are stored as `data[λ, y, x]` (wavelength axis first; `NAXIS1 = λ` in FITS but numpy transposes this)
 - Emission line wavelengths are rest-frame air wavelengths (Å) from Cresci et al. 2017
 - Systemic velocity correction: observed λ = rest λ × (1 + Z_SYS) where Z_SYS = V_SYS / c
+- V_SYS is auto-measured per galaxy via Hα+[NII] cross-correlation (`measure_systemic_velocity()`)
 - Instrumental broadening: MUSE LSF FWHM(λ) = 5.835×10⁻⁸ λ² − 9.080×10⁻⁴ λ + 5.983 (Bacon+2017)
+
+## Key findings
+
+- Galaxies with many Voronoi bins (Haro11: 1,835, NGC_1487: 1,865) take ~4h for stage 2 — this is from high continuum S/N creating many 1-spaxel bins, not a bug
+- Haro11_P1 shows strong shock/AGN signatures: 56% Seyfert in S-BPT, 60% in O-BPT
+- Galaxies with weak Hβ (ESO321-14: 782 detections, VCC0170: 300) have sparse BPT diagrams — this is intrinsic, not a pipeline issue
+- SDSSJ124615 has suspect v_sys (-23 km/s, cc=0.29) due to weak Hα — verify against literature

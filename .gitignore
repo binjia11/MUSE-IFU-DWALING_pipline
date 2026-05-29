@@ -2,6 +2,6 @@ __pycache__/
 .DS_Store
 *.pyc
 outputs/
- DWALIN_Sample/
+DWALIN_Sample/
 .claude/
 templates/bpass_v2.2.1_imf135_300.zip

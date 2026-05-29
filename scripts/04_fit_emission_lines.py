@@ -195,7 +195,7 @@ def main():
     v_map = np.full((data.shape[1], data.shape[2]), np.nan, dtype=np.float32)
     sig_map = np.full_like(v_map, np.nan)
 
-    n_proc = max(1, (os.cpu_count() or 4) - 1)
+    n_proc = int(os.environ.get("PIPE_N_WORKERS", max(1, (os.cpu_count() or 4) - 1)))
     print(f"  using {n_proc} worker processes")
 
     with Pool(n_proc) as pool:
