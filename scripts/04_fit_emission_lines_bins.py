@@ -207,8 +207,12 @@ def main():
     print(f"Wrote {out_npz}")
 
     # ---------- Build bin-level FITS intensity maps ---------------------------
-    # Use the bin map for full field shape
-    bin_map = fits.getdata(os.path.join(OUT_DIR, "voronoi_bin_map.fits"))
+    # Use the bin map for full field shape and WCS (stage 1 wrote it with hdr1)
+    bin_map_path = os.path.join(OUT_DIR, "voronoi_bin_map.fits")
+    bin_map_hdu = fits.open(bin_map_path)
+    bin_map = bin_map_hdu[0].data
+    wcs_header = bin_map_hdu[0].header.copy()
+    bin_map_hdu.close()
     ny, nx = bin_map.shape
     vb = np.load(os.path.join(OUT_DIR, "voronoi_bins.npz"))
     bin_num = vb["bin_num"]
@@ -240,7 +244,7 @@ def main():
 
         out_path = os.path.join(line_dir, f"{name}.fits")
         hdul_out = fits.HDUList([
-            fits.PrimaryHDU(),
+            fits.PrimaryHDU(header=wcs_header.copy()),
             fits.ImageHDU(flux_2d, name="FLUX"),
             fits.ImageHDU(err_2d, name="FERR"),
             fits.ImageHDU(sn_2d, name="SN"),
@@ -264,7 +268,7 @@ def main():
 
     out_kin = os.path.join(OUT_DIR, "kinematics_bins.fits")
     fits.HDUList([
-        fits.PrimaryHDU(),
+        fits.PrimaryHDU(header=wcs_header.copy()),
         fits.ImageHDU(v_map, name="V_KMS"),
         fits.ImageHDU(sig_map, name="SIGMA_KMS"),
     ]).writeto(out_kin, overwrite=True)
