@@ -56,7 +56,7 @@ LOCAL_WIN_HW  = 60.0
 LINE_MASK_HW  = 12.0
 
 # pPXF / Voronoi settings
-TARGET_SN_BIN     = 50.0
+TARGET_SN_BIN     = 30.0
 SN_FLOOR_VORONOI  = 1.0
 
 # Detection threshold
@@ -66,6 +66,44 @@ SN_DETECT = 3.0
 def muse_lsf_fwhm(lam_aa):
     """MUSE LSF FWHM (Å) from Bacon et al. 2017 polynomial fit."""
     return 5.835e-8 * lam_aa ** 2 - 9.080e-4 * lam_aa + 5.983
+
+
+# ---------------------------------------------------------------------------
+# Literature systemic velocities (heliocentric cz, km/s) from NED.
+# Keyed by cube basename (== PIPE_GALAXY). These are adopted directly as
+# V_SYS instead of the cross-correlation measurement: NED cz = c*z (optical
+# convention), which matches how the pipeline uses Z_SYS = V_SYS/c.
+# Cross-correlation (measure_systemic_velocity) is kept only as a fallback
+# for any galaxy not listed here. Verified June 2026 vs. NED; the measured
+# values agreed to <31 km/s (sub-pixel) for 21/23, but failed catastrophically
+# for ESO379-7 (got 7655, true 641) and SDSSJ124615 (got -23, true 1135).
+# ---------------------------------------------------------------------------
+LIT_VSYS = {
+    "AGC7983":              694.0,   # UGC 07983
+    "ESO154-023":           574.0,   # ESO 154-G023
+    "ESO320-14":            654.0,   # ESO 320-G014
+    "ESO321-14":            610.0,   # ESO 321-G014
+    "ESO379-7":             641.0,   # ESO 379-G007
+    "ESO379-G024":          630.0,   # ESO 379-G024
+    "ESO489-G56":           492.0,   # ESO 489-G056
+    "HEN_2-10-001":         873.0,   # Henize 2-10 / ESO 495-G021
+    "Haro11_P1":           6175.0,   # Haro 11 / ESO 350-IG038
+    "IIZW40":               804.0,   # II Zw 40 / UGCA 116
+    "J0908+0517":           598.0,   # SDSS J090836.54+051726.8
+    "J1151-0222":          1056.0,   # UM 461a
+    "NGC1705":              633.0,   # NGC 1705
+    "NGC2915":              468.0,   # NGC 2915
+    "NGC3125":             1113.0,   # NGC 3125
+    "NGC_1487":             818.0,   # NGC 1487
+    "NGC_5253":             407.0,   # NGC 5253
+    "NGC_625":              396.0,   # NGC 625
+    "SDSS115237-022806":   1059.0,   # SDSS J115237.67-022806.3
+    "SDSSJ112711.0+084353":1035.0,   # IC 2828
+    "SDSSJ124615.2+101220":1135.0,   # SDSS J124615.29+101220.1
+    "Tol_1924-416":        2834.0,   # ESO 338-IG004 / Tol 1924-416
+    "Tol_65":              2790.0,   # ESO 380-G027 / Tol 1223-359
+    "VCC0170":             1398.0,   # IC 3077 / VCC 0170
+}
 
 
 def measure_systemic_velocity(cube_path=None, verbose=True):

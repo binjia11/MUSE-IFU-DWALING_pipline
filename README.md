@@ -1,6 +1,6 @@
 # Low-Metallicity Shocks in the LMC — MUSE IFU Pipeline
 
-Pipeline for analyzing ionized gas shocks in low-metallicity dwarf galaxies using MUSE integral-field spectroscopy. The code performs Voronoi binning, pPXF stellar population fitting (BPASS v2.2.1 binary SSP templates), emission line fitting, and BPT diagnostic classification for 23 galaxies from the DWALIN survey and additional low-metallicity targets.
+Pipeline for analyzing ionized gas shocks in low-metallicity dwarf galaxies using MUSE integral-field spectroscopy. The code performs Voronoi binning (S/N ≥ 30), pPXF stellar population fitting (BPASS v2.2.1 binary SSP templates), **bin-level** emission line fitting, and **bin-level** BPT diagnostic classification for 23 galaxies from the DWALIN survey and additional low-metallicity targets.
 
 ## Requirements
 
@@ -19,7 +19,7 @@ pip install ppxf vorbin
 
 **BPASS v2.2.1** (default): Binary SSP models, IMF slope −1.35, 300 M☉ upper cutoff. 8 metallicities (Z = 0.001–0.020) × 51 ages (1 Myr–100 Gyr). Pre-processed templates are included in `templates/bpass_processed/`.
 
-To switch back to EMILES, set the environment variable:
+To use EMILES instead, set the environment variable:
 
 ```bash
 export PIPE_TEMPLATE_LIB=emiles
@@ -45,12 +45,15 @@ Data can be obtained from the [ESO Science Archive](https://archive.eso.org/).
 **Full pipeline (all galaxies, auto-skips completed):**
 
 ```bash
-# Sequential (one galaxy at a time)
+# Bin-level pipeline (default) — emission lines + BPT at Voronoi-bin resolution
 python3 scripts/run_pipeline.py
 
 # Parallel (N galaxies concurrently, 1 dedicated core each)
 python3 scripts/run_pipeline.py --parallel        # all available cores
 python3 scripts/run_pipeline.py --parallel 4      # 4 galaxies at a time
+
+# Legacy per-spaxel pipeline
+python3 scripts/run_pipeline.py --spaxel
 ```
 
 The driver auto-discovers all `.fits` files, measures systemic velocity via Hα cross-correlation, and skips galaxies with existing BPT PDFs. No timeouts — runs each stage to completion.
@@ -63,42 +66,53 @@ export PIPE_CUBE_PATH="$(pwd)/DWALIN_Sample/ESO154-023.fits"
 export PIPE_OUT_DIR="$(pwd)/outputs/ESO154-023"
 export PIPE_V_SYS=581
 export PIPE_TEMPLATE_LIB=bpass
-export PIPE_N_WORKERS=7              # stage 4 multiprocessing workers
-python3 scripts/02_ppxf_fit_bins.py
+python3 scripts/04_fit_emission_lines_bins.py
 ```
+
+**Interactive visualization (post-pipeline):**
+
+```bash
+python3 scripts/06_interactive_viz.py ESO154-023
+```
+
+Hover over the Voronoi bin map to highlight bins; click to view the full spectrum (original, continuum-subtracted, stellar model) and per-line zoom-in panels with Gaussian emission-line fits.
 
 ## Pipeline stages
 
 | Stage | Script | Description |
 |-------|--------|-------------|
-| 1 | `01_voronoi_binning.py` | Continuum S/N → Voronoi binning to S/N ≥ 50 |
+| 1 | `01_voronoi_binning.py` | Continuum S/N → Voronoi binning to S/N ≥ 30 |
 | 2 | `02_ppxf_fit_bins.py` | pPXF stellar continuum fit per bin (BPASS v2.2.1 + gas templates) |
-| 3 | `03_subtract_continuum.py` | Subtract stellar continuum from each spaxel |
-| 4 | `04_fit_emission_lines.py` | Multiprocessed Gaussian emission line fitting (12 lines) |
-| 5 | `05_bpt_diagrams.py` | N-BPT, S-BPT, O-BPT classification and PDF output |
+| 3 | `03_subtract_continuum_bins.py` | **Bin-level** continuum subtraction + local polynomial refinement |
+| 4 | `04_fit_emission_lines_bins.py` | **Bin-level** simultaneous 12-line Gaussian fitting |
+| 5 | `05_bpt_diagrams_bins.py` | **Bin-level** N-BPT, S-BPT, O-BPT classification and PDF output |
+| — | `06_interactive_viz.py` | Interactive bin-map explorer with spectral zoom-ins |
 
 ## Key design choices
 
-- **Systemic velocity**: Auto-measured per galaxy via Hα+[NII] cross-correlation (no hardcoded V_SYS=0)
-- **Line fitting**: All 12 lines fitted simultaneously with a single shared v, σ per spaxel. [OIII] and [NII] doublet ratios tied at atomic values. MUSE instrumental broadening (Bacon+2017) accounted for
-- **Detection threshold**: S/N ≥ 3 for emission line detection
-- **Parallel mode**: Each galaxy gets 1 dedicated core (`OMP_NUM_THREADS=1`, `PIPE_N_WORKERS=1`). Fast galaxies finish early, cores freed for remaining ones
+- **Bin-level analysis**: Emission lines and BPT classification are performed on Voronoi-bin integrated spectra, not individual spaxels. This gives higher S/N per measurement and faster processing.
+- **Voronoi S/N ≥ 30**: Continuum S/N measured in 5300–5530 Å rest-frame. Lower threshold produces more bins for better spatial sampling.
+- **Systemic velocity**: Auto-measured per galaxy via Hα+[NII] cross-correlation.
+- **Line fitting**: All 12 lines fitted simultaneously with a single shared v, σ per bin. [OIII] and [NII] doublet ratios tied at atomic values. MUSE instrumental broadening (Bacon+2017) accounted for.
+- **Detection threshold**: S/N ≥ 3 for emission line detection.
+- **Parallel mode**: Each galaxy gets 1 dedicated core (`OMP_NUM_THREADS=1`). Fast galaxies finish early, cores freed for remaining ones.
+- **BPASS v2.2.1** stellar templates (binary SSP, 1 Myr–100 Gyr, 8 metallicities).
 
 ## Output structure
 
 ```
 outputs/
   <galaxy>/
-    cont_SN_map.fits
-    voronoi_bin_map.fits
-    voronoi_bins.npz
-    ppxf_bin_fits.npz
-    <galaxy>_cont_sub.fits
-    kinematics.fits
-    line_maps/
-      Halpha.fits, Hbeta.fits, OIII5007.fits, NII6584.fits, ...
+    cont_SN_map.fits           Continuum S/N per spaxel
+    voronoi_bin_map.fits        Bin assignments (-1 = excluded)
+    voronoi_bins.npz            Bin geometry & stats
+    ppxf_bin_fits.npz           Stellar & gas best-fit models per bin
+    bin_spectra.npz             Bin-integrated spectra (original, noise, cont-sub)
+    bin_kinematics.npz          Bin-level v, σ, line fluxes & errors
+    kinematics_bins.fits        2D velocity & dispersion maps (bin-level)
+    bin_line_maps/              Per-line FITS maps (FLUX, FERR, SN, FLUX_SN3 at bin resolution)
   bpt/
-    <galaxy>_bpt.pdf
+    <galaxy>_bpt.pdf            BPT diagnostic diagrams (one point per bin)
 ```
 
 ## Science highlights
