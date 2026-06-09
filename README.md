@@ -1,4 +1,4 @@
-# Low-Metallicity Shocks in the LMC — MUSE IFU Pipeline
+# Low-Metallicity Shocks in Dwarfs — MUSE IFU Pipeline
 
 Pipeline for analyzing ionized gas shocks in low-metallicity dwarf galaxies using MUSE integral-field spectroscopy. The code performs Voronoi binning (S/N ≥ 30), pPXF stellar population fitting (BPASS v2.2.1 binary SSP templates), **bin-level** emission line fitting, and **bin-level** BPT diagnostic classification for 23 galaxies from the DWALIN survey and additional low-metallicity targets.
 
