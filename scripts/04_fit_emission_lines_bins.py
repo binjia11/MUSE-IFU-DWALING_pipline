@@ -265,16 +265,18 @@ def main():
         masked_flux = np.where(det, flux_2d, np.nan)
 
         out_path = os.path.join(line_dir, f"{name}.fits")
+        # Primary HDU carries the flux data and the 2D WCS so that
+        # DS9 / astropy.wcs see astrometry immediately.
+        pri_hdr = wcs_header.copy()
+        pri_hdr["LINE"] = name
+        pri_hdr["LAM_REST"] = LINES[name]
+        pri_hdr["SN_CUT"] = SN_DETECT
         hdul_out = fits.HDUList([
-            fits.PrimaryHDU(header=wcs_header.copy()),
-            fits.ImageHDU(flux_2d, name="FLUX"),
+            fits.PrimaryHDU(flux_2d, header=pri_hdr),
             fits.ImageHDU(err_2d, name="FERR"),
             fits.ImageHDU(sn_2d, name="SN"),
             fits.ImageHDU(masked_flux, name="FLUX_SN3"),
         ])
-        hdul_out[0].header["LINE"] = name
-        hdul_out[0].header["LAM_REST"] = LINES[name]
-        hdul_out[0].header["SN_CUT"] = SN_DETECT
         hdul_out.writeto(out_path, overwrite=True)
         n_det = int(np.sum(det))
         print(f"  {name:>9s}  rest={LINES[name]:.2f}  detected bins (S/N≥3) = {n_det}")
@@ -290,8 +292,7 @@ def main():
 
     out_kin = os.path.join(OUT_DIR, "kinematics_bins.fits")
     fits.HDUList([
-        fits.PrimaryHDU(header=wcs_header.copy()),
-        fits.ImageHDU(v_map, name="V_KMS"),
+        fits.PrimaryHDU(v_map, header=wcs_header.copy()),
         fits.ImageHDU(sig_map, name="SIGMA_KMS"),
     ]).writeto(out_kin, overwrite=True)
     print(f"Wrote {out_kin}")
