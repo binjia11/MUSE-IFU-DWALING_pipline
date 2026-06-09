@@ -207,13 +207,35 @@ def main():
     print(f"Wrote {out_npz}")
 
     # ---------- Build bin-level FITS intensity maps ---------------------------
-    # Use the bin map for full field shape and WCS (stage 1 wrote it with hdr1)
+    # Use the bin map for full field shape; extract clean 2D celestial WCS.
     bin_map_path = os.path.join(OUT_DIR, "voronoi_bin_map.fits")
     bin_map_hdu = fits.open(bin_map_path)
     bin_map = bin_map_hdu[0].data
-    wcs_header = bin_map_hdu[0].header.copy()
-    bin_map_hdu.close()
     ny, nx = bin_map.shape
+
+    # Stage 1 wrote the full 3D cube header into voronoi_bin_map.fits.
+    # We must strip spectral-axis keywords to produce a valid 2D WCS.
+    wcs_header = fits.Header()
+    _3D_KEYS = {
+        "NAXIS3", "CRPIX3", "CRVAL3", "CD3_3",
+        "CTYPE3", "CUNIT3", "CRDER3", "CSYER1", "CSYER2",
+        "CD1_3", "CD2_3", "CD3_1", "CD3_2",
+    }
+    _META_KEYS = {
+        "EXTEND", "EXTNAME", "ERRDATA", "BUNIT",
+        "HDUCLASS", "HDUCLAS1", "HDUCLAS2", "HDUDOC", "HDUVERS",
+        "TITLE", "OBJECT",
+    }
+    _SKIP = _3D_KEYS | _META_KEYS
+    for k, v in bin_map_hdu[0].header.items():
+        if k not in _SKIP and not k.startswith("CHECKSUM") and not k.startswith("DATASUM"):
+            wcs_header[k] = v
+    wcs_header["NAXIS"] = 2
+    wcs_header["NAXIS1"] = nx
+    wcs_header["NAXIS2"] = ny
+    # Drop stray BITPIX from the copied header (PrimaryHDU auto-sets it)
+    wcs_header.pop("BITPIX", None)
+    bin_map_hdu.close()
     vb = np.load(os.path.join(OUT_DIR, "voronoi_bins.npz"))
     bin_num = vb["bin_num"]
     xx = vb["xx"]
