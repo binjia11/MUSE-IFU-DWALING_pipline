@@ -115,17 +115,4 @@ outputs/
     <galaxy>_bpt.pdf            BPT diagnostic diagrams (one point per bin)
 ```
 
-## Science highlights
 
-- **Haro11_P1** (1,835 bins): 56% Seyfert in S-BPT, 60% in O-BPT — strong shock/AGN signatures
-- **NGC_1487** (1,865 bins, 94K spaxels): Largest galaxy in the sample
-- Galaxies with many Voronoi bins (1,000+) take hours for stage 2 — this is from high continuum S/N creating many single-spaxel bins, not a code issue
-- Several galaxies (ESO321-14, VCC0170) have sparse BPT diagrams due to intrinsically weak Hβ
-
-## References
-
-- Cresci et al. 2017 — emission line list and BPT methodology
-- Bacon et al. 2017 — MUSE LSF parameterization
-- Kewley et al. 2001, 2006; Kauffmann et al. 2003 — BPT demarcation lines
-- Stanway & Eldridge 2018 — BPASS v2.2.1 stellar population models
-- Relevant papers in `papers/`
